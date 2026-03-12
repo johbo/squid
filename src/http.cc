@@ -1025,6 +1025,11 @@ HttpStateData::haveParsedReplyHeaders()
         if (rep->cache_control) {
             // We are required to revalidate on many conditions.
             // For security reasons we do so even if storage was caused by refresh_pattern ignore-* option
+            //
+            // Exception: when ignore-private is set, the admin opted
+            // into caching CC:private responses. Skip revalidation
+            // flags from CC:private and CC:must-revalidate so that
+            // override-expire with min can serve these as fresh.
 
             // CC:must-revalidate or CC:proxy-revalidate
             const bool ccMustRevalidate = (rep->cache_control->hasProxyRevalidate() || rep->cache_control->hasMustRevalidate());
@@ -1038,9 +1043,15 @@ HttpStateData::haveParsedReplyHeaders()
             // CC:private (yes, these can sometimes be stored)
             const bool ccPrivate = rep->cache_control->hasPrivate();
 
-            if (ccNoCacheNoParams || ccPrivate)
+            bool ignorePrivate = false;
+#if USE_HTTP_VIOLATIONS
+            if (const auto *R = refreshLimits(entry->mem_obj->storeId()))
+                ignorePrivate = R->flags.ignore_private;
+#endif
+
+            if (ccNoCacheNoParams || (ccPrivate && !ignorePrivate))
                 EBIT_SET(entry->flags, ENTRY_REVALIDATE_ALWAYS);
-            else if (ccMustRevalidate || ccSMaxAge)
+            else if ((ccMustRevalidate && !ignorePrivate) || ccSMaxAge)
                 EBIT_SET(entry->flags, ENTRY_REVALIDATE_STALE);
         }
 #if USE_HTTP_VIOLATIONS // response header Pragma::no-cache is undefined in HTTP
